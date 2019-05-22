@@ -422,40 +422,63 @@ func (dbConfig *DbConfig) AutoImportEnabled() (bool, error) {
 	return false, fmt.Errorf("Unrecognized value for import_docs: %#v. Valid values are true and false.", dbConfig.AutoImport)
 }
 
-func (dbConfig DbConfig) validate() error {
+func (dbConfig DbConfig) validate() []error {
+
+	warnings := make([]error, 0)
 
 	// if there is a ChannelIndex being used, then the only valid feed type is DCPSHARD
 	if dbConfig.ChannelIndex != nil {
 		if strings.ToLower(dbConfig.FeedType) != strings.ToLower(base.DcpShardFeedType) {
 			msg := "ChannelIndex declared in config, but the FeedType is %v " +
 				"rather than expected value of DCPSHARD"
-			return fmt.Errorf(msg, dbConfig.FeedType)
+			warnings = append(warnings, fmt.Errorf(msg, dbConfig.FeedType))
 		}
 	}
 
 	if dbConfig.CompactIntervalDays != nil {
 		if *dbConfig.CompactIntervalDays < db.CompactIntervalMinDays && *dbConfig.CompactIntervalDays != 0 {
-			return fmt.Errorf("compact_interval_days cannot be lower than %g", db.CompactIntervalMinDays)
+			warnings = append(warnings, fmt.Errorf("compact_interval_days cannot be lower than %g", db.CompactIntervalMinDays))
 		}
 		if *dbConfig.CompactIntervalDays > db.CompactIntervalMinDays && *dbConfig.CompactIntervalDays != 0 {
-			return fmt.Errorf("compact_interval_days cannot be higher than %g", db.CompactIntervalMaxDays)
+			warnings = append(warnings, fmt.Errorf("compact_interval_days cannot be higher than %g", db.CompactIntervalMaxDays))
 		}
 	}
 
 	if dbConfig.CacheConfig != nil {
 
 		if dbConfig.CacheConfig.ChannelCacheConfig != nil {
-			if dbConfig.CacheConfig.ChannelCacheConfig.MaxNumber != nil {
-				if *dbConfig.CacheConfig.ChannelCacheConfig.MaxNumber < 1 {
-					return fmt.Errorf("minimum value for cache.channel_cache.max_number is 1")
-				}
+			if dbConfig.CacheConfig.ChannelCacheConfig.MaxNumber != nil && *dbConfig.CacheConfig.ChannelCacheConfig.MaxNumber < 1 {
+				warnings = append(warnings, fmt.Errorf("minimum value for cache.channel_cache.max_number is 1"))
+
+			}
+			if dbConfig.CacheConfig.ChannelCacheConfig.MaxNumPending != nil && *dbConfig.CacheConfig.ChannelCacheConfig.MaxNumPending <= 0 {
+				warnings = append(warnings, fmt.Errorf("minimum value for cache.channel_cache.max_num_pending is 1"))
+			}
+			if dbConfig.CacheConfig.ChannelCacheConfig.MaxWaitPending != nil && *dbConfig.CacheConfig.ChannelCacheConfig.MaxWaitPending <= 0 {
+				warnings = append(warnings, fmt.Errorf("minimum value for cache.channel_cache.max_wait_pending is 1"))
+			}
+			if dbConfig.CacheConfig.ChannelCacheConfig.MaxWaitSkipped != nil && *dbConfig.CacheConfig.ChannelCacheConfig.MaxWaitSkipped <= 0 {
+				warnings = append(warnings, fmt.Errorf("minimum value for cache.channel_cache.max_wait_skipped is 1"))
+			}
+			if dbConfig.CacheConfig.ChannelCacheConfig.MaxLength != nil && *dbConfig.CacheConfig.ChannelCacheConfig.MaxLength <= 0 {
+				warnings = append(warnings, fmt.Errorf("minimum value for cache.channel_cache.max_length is 1"))
+			}
+			if dbConfig.CacheConfig.ChannelCacheConfig.MinLength != nil && *dbConfig.CacheConfig.ChannelCacheConfig.MinLength <= 0 {
+				warnings = append(warnings, fmt.Errorf("minimum value for cache.channel_cache.min_length is 1"))
+			}
+			if dbConfig.CacheConfig.ChannelCacheConfig.ExpirySeconds != nil && *dbConfig.CacheConfig.ChannelCacheConfig.ExpirySeconds <= 0 {
+				warnings = append(warnings, fmt.Errorf("minimum value for cache.channel_cache.expiry_seconds is 1"))
+			}
+			if dbConfig.CacheConfig.ChannelCacheConfig.MaxNumber != nil && *dbConfig.CacheConfig.ChannelCacheConfig.MaxNumber <= 0 {
+				warnings = append(warnings, fmt.Errorf("minimum value for cache.channel_cache.max_number is 1"))
 			}
 		}
 
 		if dbConfig.CacheConfig.RevCacheConfig != nil {
 			if dbConfig.CacheConfig.RevCacheConfig.ShardCount != nil {
 				if *dbConfig.CacheConfig.RevCacheConfig.ShardCount < 1 {
-					return fmt.Errorf("minimum value for cache.rev_cache.shard_count is 1")
+					warnings = append(warnings, fmt.Errorf("minimum value for cache.rev_cache.shard_count is 1"))
+
 				}
 			}
 		}
@@ -465,46 +488,50 @@ func (dbConfig DbConfig) validate() error {
 	if strings.ToLower(dbConfig.FeedType) == strings.ToLower(base.DcpShardFeedType) {
 		if dbConfig.ChannelIndex == nil {
 			msg := "FeedType is DCPSHARD, but no ChannelIndex declared in config"
-			return fmt.Errorf(msg)
+			warnings = append(warnings, fmt.Errorf(msg))
 		}
 	}
 
 	// Error if Delta Sync is explicitly enabled in CE
 	if dbConfig.DeltaSync != nil && dbConfig.DeltaSync.Enabled != nil {
 		if *dbConfig.DeltaSync.Enabled && !base.IsEnterpriseEdition() {
-			return fmt.Errorf("Delta sync is not supported in CE")
+			warnings = append(warnings, fmt.Errorf("Delta sync is not supported in CE"))
+
 		}
 	}
 
-	return nil
+	return warnings
 
 }
 
-func (dbConfig *DbConfig) validateSgDbConfig() error {
+func (dbConfig *DbConfig) validateSgDbConfig() []error {
+
+	warnings := make([]error, 0)
 
 	if err := dbConfig.validate(); err != nil {
-		return err
+		warnings = append(warnings, err...)
 	}
 
 	if dbConfig.ChannelIndex != nil && dbConfig.ChannelIndex.IndexWriter == true {
-		return fmt.Errorf("Invalid configuration for Sync Gw.  Must not be configured as an IndexWriter")
+		warnings = append(warnings, fmt.Errorf("Invalid configuration for Sync Gw.  Must not be configured as an IndexWriter"))
 	}
 
 	// Don't allow Distributed Index and Bucket Shadowing to co-exist
 	if err := dbConfig.verifyNoDistributedIndexAndBucketShadowing(); err != nil {
-		return err
+		warnings = append(warnings, err)
 	}
 
 	autoImportEnabled, err := dbConfig.AutoImportEnabled()
 	if err != nil {
-		return err
+		warnings = append(warnings, err)
+
 	}
 
 	if dbConfig.FeedType == base.TapFeedType && autoImportEnabled == true {
-		return fmt.Errorf("Invalid configuration for Sync Gw. TAP feed type can not be used with auto-import")
+		warnings = append(warnings, fmt.Errorf("Invalid configuration for Sync Gw. TAP feed type can not be used with auto-import"))
 	}
 
-	return nil
+	return warnings
 
 }
 
@@ -587,31 +614,32 @@ func (dbConfig *DbConfig) deprecatedConfigCacheFallback() (warnings []string) {
 
 }
 
-func (dbConfig *DbConfig) validateSgAccelDbConfig() error {
+func (dbConfig *DbConfig) validateSgAccelDbConfig() []error {
+
+	warnings := make([]error, 0)
 
 	if err := dbConfig.validate(); err != nil {
-		return err
+		warnings = append(warnings, err...)
 	}
 
 	if dbConfig.ChannelIndex == nil {
-		return fmt.Errorf("Invalid configuration for Sync Gw Accel.  Must have a ChannelIndex defined")
+		warnings = append(warnings, fmt.Errorf("Invalid configuration for Sync Gw Accel.  Must have a ChannelIndex defined"))
 	}
 
 	if dbConfig.ChannelIndex.IndexWriter == false {
-		return fmt.Errorf("Invalid configuration for Sync Gw Accel.  Must be configured as an IndexWriter")
+		warnings = append(warnings, fmt.Errorf("Invalid configuration for Sync Gw Accel.  Must be configured as an IndexWriter"))
 	}
 
 	if strings.ToLower(dbConfig.FeedType) != strings.ToLower(base.DcpShardFeedType) {
-		return fmt.Errorf("Invalid configuration for Sync Gw Accel.  Must be configured for DCPSHARD feedtype")
-
+		warnings = append(warnings, fmt.Errorf("Invalid configuration for Sync Gw Accel.  Must be configured for DCPSHARD feedtype"))
 	}
 
 	// Don't allow Distributed Index and Bucket Shadowing to co-exist
 	if err := dbConfig.verifyNoDistributedIndexAndBucketShadowing(); err != nil {
-		return err
+		warnings = append(warnings, err)
 	}
 
-	return nil
+	return warnings
 
 }
 
@@ -671,20 +699,22 @@ func (clusterConfig *ClusterConfig) GetCredentials() (string, string, string) {
 }
 
 // LoadServerConfig loads a ServerConfig from either a JSON file or from a URL
-func LoadServerConfig(runMode SyncGatewayRunMode, path string) (config *ServerConfig, err error) {
+func LoadServerConfig(runMode SyncGatewayRunMode, path string) (config *ServerConfig, err []error) {
 	var dataReadCloser io.ReadCloser
 
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		resp, err := http.Get(path)
 		if err != nil {
-			return nil, err
+			return nil, []error{err}
 		} else if resp.StatusCode >= 300 {
-			return nil, base.HTTPErrorf(resp.StatusCode, http.StatusText(resp.StatusCode))
+			return nil, []error{base.HTTPErrorf(resp.StatusCode, http.StatusText(resp.StatusCode))}
 		}
 		dataReadCloser = resp.Body
 	} else {
-		dataReadCloser, err = os.Open(path)
-		if err != nil {
+		var er error
+		dataReadCloser, er = os.Open(path)
+		err = []error{er}
+		if er != nil {
 			return nil, err
 		}
 	}
@@ -694,9 +724,9 @@ func LoadServerConfig(runMode SyncGatewayRunMode, path string) (config *ServerCo
 }
 
 // readServerConfig returns a validated ServerConfig from an io.Reader
-func readServerConfig(runMode SyncGatewayRunMode, r io.Reader) (config *ServerConfig, err error) {
+func readServerConfig(runMode SyncGatewayRunMode, r io.Reader) (config *ServerConfig, err []error) {
 	if err := decodeAndSanitiseConfig(r, &config); err != nil {
-		return nil, err
+		return nil, []error{err}
 	}
 
 	config.RunMode = runMode
@@ -723,14 +753,14 @@ func decodeAndSanitiseConfig(r io.Reader, config interface{}) (err error) {
 	return d.Decode(config)
 }
 
-func (config *ServerConfig) setupAndValidateDatabases() error {
+func (config *ServerConfig) setupAndValidateDatabases() []error {
 	for name, dbConfig := range config.Databases {
 
 		if err := dbConfig.setup(name); err != nil {
-			return err
+			return []error{err}
 		}
 
-		if err := config.validateDbConfig(dbConfig); err != nil {
+		if err := config.validateDbConfig(dbConfig); err != nil && len(err) > 0 {
 			return err
 		}
 	}
@@ -816,7 +846,7 @@ func (config *ServerConfig) deprecatedConfigLoggingFallback() (warnings []base.D
 	return warnings
 }
 
-func (config *ServerConfig) validateDbConfig(dbConfig *DbConfig) error {
+func (config *ServerConfig) validateDbConfig(dbConfig *DbConfig) []error {
 
 	dbConfig.modifyConfig()
 
@@ -827,7 +857,7 @@ func (config *ServerConfig) validateDbConfig(dbConfig *DbConfig) error {
 		return dbConfig.validateSgAccelDbConfig()
 	}
 
-	return fmt.Errorf("Unexpected RunMode: %v", config.RunMode)
+	return []error{fmt.Errorf("Unexpected RunMode: %v", config.RunMode)}
 
 }
 
@@ -897,9 +927,12 @@ func ParseCommandLine(runMode SyncGatewayRunMode) {
 		// Read the configuration file(s), if any:
 		for i := 0; i < flag.NArg(); i++ {
 			filename := flag.Arg(i)
-			c, err := LoadServerConfig(runMode, filename)
-			if err != nil {
-				base.Fatalf(base.KeyAll, "Error reading config file %s: %v", base.UD(filename), err)
+			c, errors := LoadServerConfig(runMode, filename)
+			if errors != nil && len(errors) > 0 {
+				for _, err := range errors {
+					base.Errorf(base.KeyAll, "Error reading config file %s: %v", base.UD(filename), err)
+				}
+				base.Fatalf(base.KeyAll, "Error(s) during config validation")
 			}
 			if config == nil {
 				config = c
